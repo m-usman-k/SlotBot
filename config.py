@@ -41,12 +41,12 @@ CRYPTO_ADDRESSES = {
     "Ethereum": {
         "address": "fdsafds",  # Add your ETH address
         "network": "ETH",
-        "min_confirmations": 1
+        "min_confirmations": 12
     },
     "Litecoin": {
         "address": "fdsafdsa",  # Add your LTC address
         "network": "LTC",
-        "min_confirmations": 1
+        "min_confirmations": 6
     },
     "Solana": {
         "address": "fdafdsa",  # Add your SOL address
@@ -55,12 +55,11 @@ CRYPTO_ADDRESSES = {
     }
 }
 
-# API Keys for crypto transaction verification (if needed)
-CRYPTO_API_KEYS = {
-    "BTC": "",  # Your Bitcoin API key
-    "ETH": "",  # Your Ethereum API key
-    "LTC": "",  # Your Litecoin API key
-    "SOL": ""   # Your Solana API key
+# API Keys for blockchain verification
+API_KEYS = {
+    "ETHERSCAN_API_KEY": "YOUR_ETHERSCAN_API_KEY",  # Add your Etherscan API key
+    "BLOCKCHAIR_API_KEY": "YOUR_BLOCKCHAIR_API_KEY",  # Add your Blockchair API key
+    "SOLSCAN_API_KEY": "YOUR_SOLSCAN_API_KEY"  # Add your Solscan API key
 }
 
 # Default verification settings
@@ -68,5 +67,7 @@ VERIFICATION_SETTINGS = {
     "check_amount": True,           # Whether to verify the exact amount
     "check_confirmations": True,    # Whether to verify minimum confirmations
     "auto_approve": False,          # Whether to automatically approve verified transactions
-    "max_wait_time": 3600          # Maximum time to wait for confirmation (in seconds)
+    "max_wait_time": 3600,          # Maximum time to wait for confirmation (in seconds)
+    "retry_interval": 60,           # How often to retry verification (in seconds)
+    "max_retries": 60               # Maximum number of retries before giving up
 }

@@ -2,6 +2,8 @@ import discord
 from discord.ext import commands
 
 from functions.database import *
+from functions.blockchain import BlockchainVerifier
+from functions.database import verify_transaction
 
 async def user_forbidden(interaction: discord.Interaction):
     embed = discord.Embed(
@@ -186,7 +188,7 @@ async def display_available_slots(interaction: discord.Interaction, slots: list)
 
 async def display_slot_durations(interaction: discord.Interaction, slot_id: int, durations: list):
     embed = discord.Embed(
-        title=f"⏱️ Available Durations for Slot {slot_id}",
+        title=f"⏱️ Available Durations for Slot <#{slot_id}>",
         description="Select how long you want to rent this slot:",
         color=discord.Color.blue()
     )
@@ -221,9 +223,12 @@ class TicketNameModal(discord.ui.Modal):
         ))
 
 class TransactionModal(discord.ui.Modal):
-    def __init__(self, crypto_type: str):
+    def __init__(self, crypto_type: str, points_amount: int, price_eur: float):
         super().__init__(title="Transaction Verification")
         self.crypto_type = crypto_type
+        self.points_amount = points_amount
+        self.price_eur = price_eur
+        
         self.tx_id = discord.ui.TextInput(
             label="Transaction ID",
             placeholder="Enter your transaction ID...",
@@ -232,9 +237,57 @@ class TransactionModal(discord.ui.Modal):
         self.add_item(self.tx_id)
 
     async def on_submit(self, interaction: discord.Interaction):
-        # This will be handled by the button's callback
-        self.transaction_id = self.tx_id.value
-        await interaction.response.defer()
+        from functions.blockchain import BlockchainVerifier
+        from functions.database import verify_transaction, is_transaction_id_used
+        
+        # Get ticket ID from channel name
+        ticket_id = int(interaction.channel.name.split('-')[-1])
+        
+        # Check if transaction ID is already used
+        if is_transaction_id_used(self.tx_id.value):
+            await interaction.response.send_message(
+                embed=discord.Embed(
+                    title="❌ Transaction Already Used",
+                    description="This transaction ID has already been used for another ticket.",
+                    color=discord.Color.red()
+                ),
+                ephemeral=True
+            )
+            return
+        
+        # Verify transaction
+        is_valid = await BlockchainVerifier.verify_transaction(
+            self.crypto_type,
+            self.tx_id.value,
+            self.price_eur
+        )
+        
+        if is_valid:
+            # Update ticket status and add points
+            if verify_transaction(ticket_id, self.tx_id.value):
+                await interaction.response.send_message(
+                    embed=discord.Embed(
+                        title="✅ Payment Verified",
+                        description=f"Your payment has been verified and {self.points_amount} points have been added to your account!",
+                        color=discord.Color.green()
+                    )
+                )
+            else:
+                await interaction.response.send_message(
+                    embed=discord.Embed(
+                        title="❌ Error",
+                        description="Failed to process your payment. Please contact an administrator.",
+                        color=discord.Color.red()
+                    )
+                )
+        else:
+            await interaction.response.send_message(
+                embed=discord.Embed(
+                    title="❌ Invalid Transaction",
+                    description="The transaction ID you provided could not be verified. Please check and try again.",
+                    color=discord.Color.red()
+                )
+            )
 
 class PointPurchaseView(discord.ui.View):
     def __init__(self, cog):
@@ -282,11 +335,44 @@ class CryptoSelect(discord.ui.Select):
         self.view.selected_crypto = self.values[0]  # Store the selected crypto
         await display_crypto_address(interaction, self.values[0])
 
+class PointsPackageSelect(discord.ui.Select):
+    def __init__(self):
+        from config import POINTS_PRICES
+        options = [
+            discord.SelectOption(
+                label=f"{points} Points",
+                description=f"{price}€",
+                value=str(points)
+            ) for points, price in POINTS_PRICES.items()
+        ]
+        super().__init__(
+            placeholder="Select points package...",
+            options=options
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        from config import POINTS_PRICES
+        points = int(self.values[0])
+        price = POINTS_PRICES[points]
+        self.view.selected_points = points
+        self.view.selected_price = price
+        await interaction.response.send_message(
+            embed=discord.Embed(
+                title="✅ Points Package Selected",
+                description=f"You selected **{points} points** for **{price}€**.",
+                color=discord.Color.green()
+            ),
+            ephemeral=True
+        )
+
 class TicketView(discord.ui.View):
     def __init__(self, addresses: dict):
         super().__init__(timeout=None)
+        self.add_item(PointsPackageSelect())
         self.add_item(CryptoSelect(addresses))
-        self.selected_crypto = None  # Add this to store selected crypto
+        self.selected_crypto = None
+        self.selected_points = None
+        self.selected_price = None
 
     @discord.ui.button(label="Rename Ticket", style=discord.ButtonStyle.secondary, emoji="✏️")
     async def rename_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -313,7 +399,18 @@ class TicketView(discord.ui.View):
             )
             return
             
-        modal = TransactionModal(self.selected_crypto)
+        if not self.selected_points or not self.selected_price:
+            await interaction.response.send_message(
+                embed=discord.Embed(
+                    title="❌ Error",
+                    description="Please select a points package first!",
+                    color=discord.Color.red()
+                ),
+                ephemeral=True
+            )
+            return
+            
+        modal = TransactionModal(self.selected_crypto, self.selected_points, self.selected_price)
         await interaction.response.send_modal(modal)
 
 async def display_crypto_address(interaction: discord.Interaction, crypto_type: str):

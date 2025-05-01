@@ -393,3 +393,9 @@ def get_user_tickets(user_id: int) -> list:
         cursor = conn.cursor()
         cursor.execute("SELECT id, status, created_at FROM tickets WHERE user_id = ?", (user_id,))
         return cursor.fetchall()
+
+def is_transaction_id_used(transaction_id: str) -> bool:
+    with db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT 1 FROM tickets WHERE transaction_id = ?", (transaction_id,))
+        return cursor.fetchone() is not None
