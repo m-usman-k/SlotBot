@@ -2,6 +2,7 @@
 .env
 
 # Folders
-
+/__pycache__
 
 # Subfolders
+*/__pycache__/
