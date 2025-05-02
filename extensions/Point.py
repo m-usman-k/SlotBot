@@ -71,6 +71,7 @@ class SlotDurationSelect(discord.ui.Select):
             duration_seconds, duration_name = DURATION_CONFIG[duration][:2]
             points_cost = int(points_per_duration * (duration_seconds / 3600))
             if purchase_slot(self.slot_id, interaction.user.id, duration_seconds, points_cost):
+                self.view.cog.pings_left_per_slot[self.slot_id] = 3  # Reset pings on purchase
                 await self.view.display_claimed(interaction, self.slot_id, interaction.user)
             else:
                 await interaction.response.send_message(
@@ -100,31 +101,29 @@ class SlotDurationView(discord.ui.View):
         await self.cog.display_claimed(interaction, slot_id, user)
 
 class SlotClaimedView(discord.ui.View):
-    def __init__(self, owner_id, cog, slot_id, username, pings_left, available_until, claimed_message=None, claimed_embed=None):
+    def __init__(self, owner_id, cog, slot_id, username, available_until, claimed_message=None, claimed_embed=None, info_message=None):
         super().__init__(timeout=None)
         self.owner_id = owner_id
         self.cog = cog
         self.slot_id = slot_id
         self.username = username
-        self.pings_left = pings_left
         self.available_until = available_until
         self.claimed_message = claimed_message
         self.claimed_embed = claimed_embed
+        self.info_message = info_message
     @discord.ui.button(label="Setup Slot", style=discord.ButtonStyle.primary)
     async def setup_slot(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
             if interaction.user.id != self.owner_id:
                 await user_forbidden(interaction)
                 return
-            # Edit the claimed message to show the setup embed with select menu inside
             setup_embed = discord.Embed(
                 title="Slot Setup",
                 description="Setup your Slot by using the menu below.",
                 color=discord.Color.blue()
             )
             view = SetupOptionsView(setup_embed, self.claimed_message)
-            await self.claimed_message.edit(embed=setup_embed, view=view)
-            await interaction.response.defer()
+            await interaction.response.send_message(embed=setup_embed, view=view, ephemeral=True)
         except Exception as e:
             await interaction.response.send_message(
                 embed=discord.Embed(
@@ -140,7 +139,27 @@ class SlotClaimedView(discord.ui.View):
             if interaction.user.id != self.owner_id:
                 await user_forbidden(interaction)
                 return
+            # Ping tracking
+            pings_left = self.cog.pings_left_per_slot.get(self.slot_id, 3)
+            if pings_left <= 0:
+                await interaction.response.send_message(
+                    embed=discord.Embed(
+                        title="❌ No Pings Left",
+                        description="You have used all your pings for this slot.",
+                        color=discord.Color.red()
+                    ),
+                    ephemeral=True
+                )
+                return
             await display_slot_ping(interaction.channel, interaction.user)
+            self.cog.pings_left_per_slot[self.slot_id] = pings_left - 1
+            # Update info embed
+            info_embed = discord.Embed(
+                title="Slot Information",
+                description=f"**Pings Left - {pings_left - 1}**\nSlot available {self.available_until}",
+                color=discord.Color.blue()
+            )
+            await self.info_message.edit(embed=info_embed, view=self)
             await interaction.response.send_message(
                 embed=discord.Embed(
                     title="✅ Ping Sent",
@@ -170,57 +189,57 @@ class SetupOptionsSelect(discord.ui.Select):
         self.parent_view = parent_view
     async def callback(self, interaction: discord.Interaction):
         if self.values[0] == "desc":
-            await interaction.response.send_modal(DescriptionModal(self.parent_view, interaction.message))
+            await interaction.response.send_modal(DescriptionModal(self.parent_view, self.parent_view.claimed_message))
         elif self.values[0] == "footer":
-            await interaction.response.send_modal(FooterModal(self.parent_view, interaction.message))
+            await interaction.response.send_modal(FooterModal(self.parent_view, self.parent_view.claimed_message))
         elif self.values[0] == "color":
-            await interaction.response.send_modal(ColorModal(self.parent_view, interaction.message))
+            await interaction.response.send_modal(ColorModal(self.parent_view, self.parent_view.claimed_message))
 
 class SetupOptionsView(discord.ui.View):
-    def __init__(self, embed, message):
+    def __init__(self, embed, claimed_message):
         super().__init__(timeout=None)
         self.embed = embed
-        self.message = message
+        self.claimed_message = claimed_message
         self.add_item(SetupOptionsSelect(self))
 
 class DescriptionModal(discord.ui.Modal, title="Set Description"):
-    def __init__(self, parent_view, message):
+    def __init__(self, parent_view, claimed_message):
         super().__init__()
         self.parent_view = parent_view
-        self.message = message
+        self.claimed_message = claimed_message
         self.desc = discord.ui.TextInput(label="New Description", style=discord.TextStyle.paragraph, required=True)
         self.add_item(self.desc)
     async def on_submit(self, interaction: discord.Interaction):
         embed = self.parent_view.embed
         embed.description = self.desc.value
-        await self.message.edit(embed=embed, view=self.parent_view)
+        await self.claimed_message.edit(embed=embed)
         await interaction.response.send_message("Description updated!", ephemeral=True)
 
 class FooterModal(discord.ui.Modal, title="Set Footer"):
-    def __init__(self, parent_view, message):
+    def __init__(self, parent_view, claimed_message):
         super().__init__()
         self.parent_view = parent_view
-        self.message = message
+        self.claimed_message = claimed_message
         self.footer = discord.ui.TextInput(label="New Footer", style=discord.TextStyle.short, required=True)
         self.add_item(self.footer)
     async def on_submit(self, interaction: discord.Interaction):
         embed = self.parent_view.embed
         embed.set_footer(text=self.footer.value)
-        await self.message.edit(embed=embed, view=self.parent_view)
+        await self.claimed_message.edit(embed=embed)
         await interaction.response.send_message("Footer updated!", ephemeral=True)
 
 class ColorModal(discord.ui.Modal, title="Set Color"):
-    def __init__(self, parent_view, message):
+    def __init__(self, parent_view, claimed_message):
         super().__init__()
         self.parent_view = parent_view
-        self.message = message
+        self.claimed_message = claimed_message
         self.color = discord.ui.TextInput(label="New Color (hex, e.g. #7289da)", style=discord.TextStyle.short, required=True)
         self.add_item(self.color)
     async def on_submit(self, interaction: discord.Interaction):
         embed = self.parent_view.embed
         try:
             embed.color = discord.Color(int(self.color.value.replace('#', ''), 16))
-            await self.message.edit(embed=embed, view=self.parent_view)
+            await self.claimed_message.edit(embed=embed)
             await interaction.response.send_message("Color updated!", ephemeral=True)
         except Exception:
             await interaction.response.send_message("Invalid color format! Use hex like #7289da", ephemeral=True)
@@ -262,6 +281,7 @@ class Point(commands.Cog):
         self.bot = bot
         create_ticket_tables()
         self.slot_check_task = self.bot.loop.create_task(self.check_slot_times())
+        self.pings_left_per_slot = {}  # {slot_id: pings_left}
 
     def cog_unload(self):
         if self.slot_check_task:
@@ -271,7 +291,6 @@ class Point(commands.Cog):
         await self.bot.wait_until_ready()
         while not self.bot.is_closed():
             try:
-                # Get all slots
                 slots = get_slots()
                 current_time = int(time.time())
                 from config import DURATION_CONFIG
@@ -283,10 +302,8 @@ class Point(commands.Cog):
                     if points_per_duration is None:
                         print(f"Warning: Slot {slot_id} has no points_per_duration set. Skipping.")
                         continue
-                    # Build durations with correct points for this slot
                     slot_durations = [(key, (seconds, name, int(points_per_duration * (seconds / 3600)))) for key, (seconds, name) in DURATION_CONFIG.items()]
                     channel = self.bot.get_channel(slot_id)
-                    # Only if slot was owned and now expired, reset and show available embed
                     if occupied and occupied_till and current_time >= occupied_till:
                         if channel:
                             try:
@@ -302,11 +319,12 @@ class Point(commands.Cog):
                                             occupied_till = 0 
                                         WHERE id = {slot_id}
                                     """)
+                                self.pings_left_per_slot[slot_id] = 3  # Reset pings on expire
                             except Exception as e:
                                 print(f"Error resetting slot {slot_id}: {e}")
             except Exception as e:
                 print(f"Error in slot check loop: {e}")
-            await asyncio.sleep(60)  # Check every minute
+            await asyncio.sleep(60)
 
     async def cog_load(self):
         # On cog load (bot startup), delete all messages and send available embed for every slot channel
@@ -469,11 +487,10 @@ class Point(commands.Cog):
         )
 
     async def display_claimed(self, interaction, slot_id, user):
-        pings_left = 3
+        pings_left = self.pings_left_per_slot.get(slot_id, 3)
         available_until = "<timestamp>"
         username = user.name
         owner_id = user.id
-        # Remove slot id from embed
         claimed_embed = discord.Embed(
             title=f"Slot - {username}",
             description="No Shop setup yet",
@@ -487,8 +504,12 @@ class Point(commands.Cog):
         channel = interaction.channel
         await delete_all_messages(channel)
         claimed_message = await channel.send(embed=claimed_embed)
-        view = SlotClaimedView(owner_id, self, slot_id, username, pings_left, available_until, claimed_message=claimed_message, claimed_embed=claimed_embed)
-        await channel.send(embed=info_embed, view=view)
+        info_message = await channel.send(embed=info_embed)
+        view = SlotClaimedView(  # pass info_message for updating
+            owner_id, self, slot_id, username, available_until, claimed_message=claimed_message, claimed_embed=claimed_embed, info_message=info_message
+        )
+        await info_message.edit(view=view)
+        self.pings_left_per_slot[slot_id] = pings_left
 
     async def display_setup(self, interaction, slot_id, ephemeral=False):
         view = SetupSelectView(self, slot_id)
