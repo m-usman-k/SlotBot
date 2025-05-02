@@ -3,7 +3,6 @@ from discord.ext import commands
 
 from functions.database import *
 from functions.blockchain import BlockchainVerifier
-from functions.database import verify_transaction
 
 async def user_forbidden(interaction: discord.Interaction):
     embed = discord.Embed(
@@ -238,7 +237,7 @@ class TransactionModal(discord.ui.Modal):
 
     async def on_submit(self, interaction: discord.Interaction):
         from functions.blockchain import BlockchainVerifier
-        from functions.database import verify_transaction, is_transaction_id_used
+        from functions.database import is_transaction_id_used, add_points
         
         # Get ticket ID from channel name
         ticket_id = int(interaction.channel.name.split('-')[-1])
@@ -263,8 +262,11 @@ class TransactionModal(discord.ui.Modal):
         )
         
         if is_valid:
-            # Update ticket status and add points
-            if verify_transaction(ticket_id, self.tx_id.value):
+            # Add points to user
+            if add_points(id=interaction.user.id, points=self.points_amount):
+                # Delete the ticket channel
+                
+                # Send success message to user
                 await interaction.response.send_message(
                     embed=discord.Embed(
                         title="✅ Payment Verified",
@@ -272,11 +274,12 @@ class TransactionModal(discord.ui.Modal):
                         color=discord.Color.green()
                     )
                 )
+                await interaction.channel.delete()
             else:
                 await interaction.response.send_message(
                     embed=discord.Embed(
                         title="❌ Error",
-                        description="Failed to process your payment. Please contact an administrator.",
+                        description="Failed to add points to your account. Please contact an administrator.",
                         color=discord.Color.red()
                     )
                 )
@@ -477,5 +480,47 @@ class SlotInfoView(discord.ui.View):
     def __init__(self, slots: list):
         super().__init__()
         self.add_item(SlotInfoSelect(slots))
+
+async def delete_all_messages(channel: discord.TextChannel):
+    async for msg in channel.history(limit=None):
+        await msg.delete()
+
+async def display_slot_available(channel: discord.TextChannel, slot_id: int, durations: list, view: discord.ui.View):
+    await delete_all_messages(channel)
+    embed = discord.Embed(
+        title=f"Slot {slot_id} - Available",
+        description="This Slot is currently available, you can buy it by using the Select Menu below.",
+        color=discord.Color.blue()
+    )
+    await channel.send(embed=embed, view=view)
+
+async def display_slot_claimed(channel: discord.TextChannel, slot_id: int, username: str, pings_left: int, available_until: str, owner_id: int, view: discord.ui.View):
+    await delete_all_messages(channel)
+    embed = discord.Embed(
+        title=f"Slot {slot_id} - {username}",
+        description="No Shop setup yet",
+        color=discord.Color.purple()
+    )
+    info_embed = discord.Embed(
+        title="Slot Information",
+        description=f"**Pings Left - {pings_left}**\nSlot available {available_until}",
+        color=discord.Color.blue()
+    )
+    await channel.send(embed=embed)
+    await channel.send(embed=info_embed, view=view)
+
+async def display_slot_setup(channel: discord.TextChannel, view: discord.ui.View):
+    embed = discord.Embed(
+        title="Slot Setup",
+        description="Setup your Slot by using the menu below.",
+        color=discord.Color.blue()
+    )
+    await channel.send(embed=embed, view=view)
+
+async def display_slot_setup_options(channel: discord.TextChannel, view: discord.ui.View):
+    await channel.send(view=view)
+
+async def display_slot_ping(channel: discord.TextChannel, user: discord.User):
+    await channel.send(f"@everyone Pinged by {user.mention}")
 
 

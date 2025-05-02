@@ -34,49 +34,222 @@ class SlotPurchaseSelect(discord.ui.Select):
         )
 
 class SlotDurationSelect(discord.ui.Select):
-    def __init__(self, slot_id: int):
+    def __init__(self, slot_id: int, slot_durations: list):
         self.slot_id = slot_id
         options = [
             discord.SelectOption(
                 label=name,
+                description=f"Buy {name} for {points} Points",
                 value=key
-            ) for key, (_, name) in DURATION_CONFIG.items()
+            ) for key, (seconds, name, points) in slot_durations
         ]
-        super().__init__(
-            placeholder="Select duration...",
-            options=options
-        )
+        super().__init__(placeholder="Duration you want to buy", options=options)
 
     async def callback(self, interaction: discord.Interaction):
-        duration = self.values[0]
-        
-        # Get slot information
-        slot_info = get_slot_info(self.slot_id)
-        if not slot_info:
-            await slot_purchase_failed(interaction, "Invalid slot ID!")
-            return
-        
-        points_per_duration, default_name, occupied, occupied_by, occupied_till = slot_info
-        
-        # Check if slot is available
-        if occupied:
-            await slot_purchase_failed(interaction, "This slot is currently occupied!")
-            return
-
-        # Calculate cost
-        duration_seconds, duration_name = DURATION_CONFIG[duration]
-        points_cost = int(points_per_duration * (duration_seconds / 3600))  # Cost per hour
-
-        # Try to purchase the slot
-        if purchase_slot(self.slot_id, interaction.user.id, duration_seconds, points_cost):
-            await slot_purchase_success(interaction, self.slot_id, duration_name, points_cost)
-        else:
-            await slot_purchase_failed(interaction, "You don't have enough points or an error occurred!")
+        try:
+            # Enforce one slot per user
+            current_slot = get_user_slot(interaction.user.id)
+            if current_slot:
+                await interaction.response.send_message(
+                    embed=discord.Embed(
+                        title="❌ Slot Purchase Failed",
+                        description="You already have an active slot!",
+                        color=discord.Color.red()
+                    ),
+                    ephemeral=True
+                )
+                return
+            duration = self.values[0]
+            slot_info = get_slot_info(self.slot_id)
+            if not slot_info:
+                await slot_purchase_failed(interaction, "Invalid slot ID!")
+                return
+            points_per_duration, default_name, occupied, occupied_by, occupied_till = slot_info
+            if occupied:
+                await slot_purchase_failed(interaction, "This slot is currently occupied!")
+                return
+            duration_seconds, duration_name = DURATION_CONFIG[duration][:2]
+            points_cost = int(points_per_duration * (duration_seconds / 3600))
+            if purchase_slot(self.slot_id, interaction.user.id, duration_seconds, points_cost):
+                await self.view.display_claimed(interaction, self.slot_id, interaction.user)
+            else:
+                await interaction.response.send_message(
+                    embed=discord.Embed(
+                        title="❌ Slot Purchase Failed",
+                        description="You don't have enough points or an error occurred!",
+                        color=discord.Color.red()
+                    ),
+                    ephemeral=True
+                )
+        except Exception as e:
+            await interaction.response.send_message(
+                embed=discord.Embed(
+                    title="❌ Error",
+                    description=f"An error occurred: {e}",
+                    color=discord.Color.red()
+                ),
+                ephemeral=True
+            )
 
 class SlotDurationView(discord.ui.View):
-    def __init__(self, slot_id: int):
+    def __init__(self, slot_id: int, slot_durations: list, cog):
         super().__init__()
-        self.add_item(SlotDurationSelect(slot_id))
+        self.add_item(SlotDurationSelect(slot_id, slot_durations))
+        self.cog = cog
+    async def display_claimed(self, interaction, slot_id, user):
+        await self.cog.display_claimed(interaction, slot_id, user)
+
+class SlotClaimedView(discord.ui.View):
+    def __init__(self, owner_id, cog, slot_id, username, pings_left, available_until, claimed_message=None, claimed_embed=None):
+        super().__init__(timeout=None)
+        self.owner_id = owner_id
+        self.cog = cog
+        self.slot_id = slot_id
+        self.username = username
+        self.pings_left = pings_left
+        self.available_until = available_until
+        self.claimed_message = claimed_message
+        self.claimed_embed = claimed_embed
+    @discord.ui.button(label="Setup Slot", style=discord.ButtonStyle.primary)
+    async def setup_slot(self, interaction: discord.Interaction, button: discord.ui.Button):
+        try:
+            if interaction.user.id != self.owner_id:
+                await user_forbidden(interaction)
+                return
+            # Edit the claimed message to show the setup embed with select menu inside
+            setup_embed = discord.Embed(
+                title="Slot Setup",
+                description="Setup your Slot by using the menu below.",
+                color=discord.Color.blue()
+            )
+            view = SetupOptionsView(setup_embed, self.claimed_message)
+            await self.claimed_message.edit(embed=setup_embed, view=view)
+            await interaction.response.defer()
+        except Exception as e:
+            await interaction.response.send_message(
+                embed=discord.Embed(
+                    title="❌ Error",
+                    description=f"An error occurred: {e}",
+                    color=discord.Color.red()
+                ),
+                ephemeral=True
+            )
+    @discord.ui.button(label="Use Ping", style=discord.ButtonStyle.secondary)
+    async def use_ping(self, interaction: discord.Interaction, button: discord.ui.Button):
+        try:
+            if interaction.user.id != self.owner_id:
+                await user_forbidden(interaction)
+                return
+            await display_slot_ping(interaction.channel, interaction.user)
+            await interaction.response.send_message(
+                embed=discord.Embed(
+                    title="✅ Ping Sent",
+                    description="Everyone has been pinged!",
+                    color=discord.Color.green()
+                ),
+                ephemeral=True
+            )
+        except Exception as e:
+            await interaction.response.send_message(
+                embed=discord.Embed(
+                    title="❌ Error",
+                    description=f"An error occurred: {e}",
+                    color=discord.Color.red()
+                ),
+                ephemeral=True
+            )
+
+class SetupOptionsSelect(discord.ui.Select):
+    def __init__(self, parent_view):
+        options = [
+            discord.SelectOption(label="Set Description", description="Set the Description of the Shop Ticket Embed.", value="desc"),
+            discord.SelectOption(label="Set Footer", description="Set the Footer of the Shop Ticket Embed.", value="footer"),
+            discord.SelectOption(label="Set Color", description="Set the Color of the Shop Ticket Embed.", value="color"),
+        ]
+        super().__init__(placeholder="Choose The Action To Perform", options=options)
+        self.parent_view = parent_view
+    async def callback(self, interaction: discord.Interaction):
+        if self.values[0] == "desc":
+            await interaction.response.send_modal(DescriptionModal(self.parent_view, interaction.message))
+        elif self.values[0] == "footer":
+            await interaction.response.send_modal(FooterModal(self.parent_view, interaction.message))
+        elif self.values[0] == "color":
+            await interaction.response.send_modal(ColorModal(self.parent_view, interaction.message))
+
+class SetupOptionsView(discord.ui.View):
+    def __init__(self, embed, message):
+        super().__init__(timeout=None)
+        self.embed = embed
+        self.message = message
+        self.add_item(SetupOptionsSelect(self))
+
+class DescriptionModal(discord.ui.Modal, title="Set Description"):
+    def __init__(self, parent_view, message):
+        super().__init__()
+        self.parent_view = parent_view
+        self.message = message
+        self.desc = discord.ui.TextInput(label="New Description", style=discord.TextStyle.paragraph, required=True)
+        self.add_item(self.desc)
+    async def on_submit(self, interaction: discord.Interaction):
+        embed = self.parent_view.embed
+        embed.description = self.desc.value
+        await self.message.edit(embed=embed, view=self.parent_view)
+        await interaction.response.send_message("Description updated!", ephemeral=True)
+
+class FooterModal(discord.ui.Modal, title="Set Footer"):
+    def __init__(self, parent_view, message):
+        super().__init__()
+        self.parent_view = parent_view
+        self.message = message
+        self.footer = discord.ui.TextInput(label="New Footer", style=discord.TextStyle.short, required=True)
+        self.add_item(self.footer)
+    async def on_submit(self, interaction: discord.Interaction):
+        embed = self.parent_view.embed
+        embed.set_footer(text=self.footer.value)
+        await self.message.edit(embed=embed, view=self.parent_view)
+        await interaction.response.send_message("Footer updated!", ephemeral=True)
+
+class ColorModal(discord.ui.Modal, title="Set Color"):
+    def __init__(self, parent_view, message):
+        super().__init__()
+        self.parent_view = parent_view
+        self.message = message
+        self.color = discord.ui.TextInput(label="New Color (hex, e.g. #7289da)", style=discord.TextStyle.short, required=True)
+        self.add_item(self.color)
+    async def on_submit(self, interaction: discord.Interaction):
+        embed = self.parent_view.embed
+        try:
+            embed.color = discord.Color(int(self.color.value.replace('#', ''), 16))
+            await self.message.edit(embed=embed, view=self.parent_view)
+            await interaction.response.send_message("Color updated!", ephemeral=True)
+        except Exception:
+            await interaction.response.send_message("Invalid color format! Use hex like #7289da", ephemeral=True)
+
+class SetupSelect(discord.ui.Select):
+    def __init__(self, cog, slot_id):
+        options = [
+            discord.SelectOption(label="Choose The Action To Perform", value="choose", description="Choose what you want to do")
+        ]
+        super().__init__(placeholder="Choose The Action To Perform", options=options)
+        self.cog = cog
+        self.slot_id = slot_id
+    async def callback(self, interaction: discord.Interaction):
+        try:
+            await self.cog.display_setup_options(interaction, self.slot_id, ephemeral=True)
+        except Exception as e:
+            await interaction.response.send_message(
+                embed=discord.Embed(
+                    title="❌ Error",
+                    description=f"An error occurred: {e}",
+                    color=discord.Color.red()
+                ),
+                ephemeral=True
+            )
+
+class SetupSelectView(discord.ui.View):
+    def __init__(self, cog, slot_id):
+        super().__init__()
+        self.add_item(SetupSelect(cog, slot_id))
 
 class SlotPurchaseView(discord.ui.View):
     def __init__(self, slots: list):
@@ -101,24 +274,25 @@ class Point(commands.Cog):
                 # Get all slots
                 slots = get_slots()
                 current_time = int(time.time())
-                
+                from config import DURATION_CONFIG
                 for slot_id in slots:
                     slot_info = get_slot_info(slot_id)
                     if not slot_info:
                         continue
-                        
                     points_per_duration, default_name, occupied, occupied_by, occupied_till = slot_info
-                    
-                    # Check if slot is occupied and time has expired
+                    if points_per_duration is None:
+                        print(f"Warning: Slot {slot_id} has no points_per_duration set. Skipping.")
+                        continue
+                    # Build durations with correct points for this slot
+                    slot_durations = [(key, (seconds, name, int(points_per_duration * (seconds / 3600)))) for key, (seconds, name) in DURATION_CONFIG.items()]
+                    channel = self.bot.get_channel(slot_id)
+                    # Only if slot was owned and now expired, reset and show available embed
                     if occupied and occupied_till and current_time >= occupied_till:
-                        # Get the channel
-                        channel = self.bot.get_channel(slot_id)
                         if channel:
                             try:
-                                # Reset the channel name
+                                await delete_all_messages(channel)
+                                await display_slot_available(channel, slot_id, slot_durations, SlotDurationView(slot_id, slot_durations, self))
                                 await channel.edit(name=default_name)
-                                
-                                # Update database
                                 with db_connection() as conn:
                                     cursor = conn.cursor()
                                     cursor.execute(f"""
@@ -130,14 +304,35 @@ class Point(commands.Cog):
                                     """)
                             except Exception as e:
                                 print(f"Error resetting slot {slot_id}: {e}")
-                
             except Exception as e:
                 print(f"Error in slot check loop: {e}")
-            
             await asyncio.sleep(60)  # Check every minute
+
+    async def cog_load(self):
+        # On cog load (bot startup), delete all messages and send available embed for every slot channel
+        await self.bot.wait_until_ready()
+        slots = get_slots()
+        from config import DURATION_CONFIG
+        for slot_id in slots:
+            slot_info = get_slot_info(slot_id)
+            if not slot_info:
+                continue
+            points_per_duration, default_name, occupied, occupied_by, occupied_till = slot_info
+            if points_per_duration is None:
+                print(f"Warning: Slot {slot_id} has no points_per_duration set. Skipping.")
+                continue
+            slot_durations = [(key, (seconds, name, int(points_per_duration * (seconds / 3600)))) for key, (seconds, name) in DURATION_CONFIG.items()]
+            channel = self.bot.get_channel(slot_id)
+            if channel:
+                try:
+                    await delete_all_messages(channel)
+                    await display_slot_available(channel, slot_id, slot_durations, SlotDurationView(slot_id, slot_durations, self))
+                except Exception as e:
+                    print(f"Error initializing slot {slot_id}: {e}")
 
     @app_commands.command(name="points-shop", description="Open the points shop")
     async def points_shop(self, interaction: discord.Interaction):
+        add_user(id=interaction.user.id)
         await display_points_shop(interaction, self)
 
     async def create_purchase_ticket(self, interaction: discord.Interaction):
@@ -272,6 +467,53 @@ class Point(commands.Cog):
             ),
             view=SlotInfoView(slot_info)
         )
+
+    async def display_claimed(self, interaction, slot_id, user):
+        pings_left = 3
+        available_until = "<timestamp>"
+        username = user.name
+        owner_id = user.id
+        # Remove slot id from embed
+        claimed_embed = discord.Embed(
+            title=f"Slot - {username}",
+            description="No Shop setup yet",
+            color=discord.Color.purple()
+        )
+        info_embed = discord.Embed(
+            title="Slot Information",
+            description=f"**Pings Left - {pings_left}**\nSlot available {available_until}",
+            color=discord.Color.blue()
+        )
+        channel = interaction.channel
+        await delete_all_messages(channel)
+        claimed_message = await channel.send(embed=claimed_embed)
+        view = SlotClaimedView(owner_id, self, slot_id, username, pings_left, available_until, claimed_message=claimed_message, claimed_embed=claimed_embed)
+        await channel.send(embed=info_embed, view=view)
+
+    async def display_setup(self, interaction, slot_id, ephemeral=False):
+        view = SetupSelectView(self, slot_id)
+        if ephemeral:
+            await interaction.response.send_message(
+                embed=discord.Embed(
+                    title="Slot Setup",
+                    description="Setup your Slot by using the menu below.",
+                    color=discord.Color.blue()
+                ),
+                view=view,
+                ephemeral=True
+            )
+        else:
+            await display_slot_setup(interaction.channel, view)
+
+    async def display_setup_options(self, interaction, slot_id, ephemeral=False):
+        view = SetupOptionsView(discord.Embed(title="Slot Setup", description="Setup your Slot by using the menu below.", color=discord.Color.blue()), None)
+        if ephemeral:
+            await interaction.response.send_message(
+                view=view,
+                ephemeral=True
+            )
+        else:
+            await display_slot_setup_options(interaction.channel, view)
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(Point(bot=bot))

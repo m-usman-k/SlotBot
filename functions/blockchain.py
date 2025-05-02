@@ -34,115 +34,135 @@ class BlockchainVerifier:
 
     @staticmethod
     async def _verify_btc_transaction(tx_id: str, address: str, expected_amount: float, min_confirmations: int) -> bool:
-        """Verify Bitcoin transaction using Blockstream API"""
-        url = f"https://blockstream.info/api/tx/{tx_id}"
-        response = requests.get(url)
-        if response.status_code != 200:
+        """Verify Bitcoin transaction using blockchain.info API"""
+        try:
+            # Get transaction details from blockchain.info
+            tx_url = f"https://api.blockchain.info/haskoin-store/btc/transaction/{tx_id}"
+            tx_response = requests.get(tx_url)
+            if tx_response.status_code != 200:
+                return False
+            
+            tx_data = tx_response.json()
+            
+            # Get current BTC price from bitaps
+            price_url = "https://bitaps.com/js/get/update"
+            price_response = requests.post(price_url)
+            if price_response.status_code != 200:
+                return False
+            
+            price_data = price_response.json()
+            btc_price = float(price_data['average']['dollars'].replace(" ", "") + "." + price_data['average']['cents'])
+            
+            # Verify recipient and amount
+            for output in tx_data['outputs']:
+                if output['address'] == address:
+                    print("here 1")
+                    amount_btc = output['value'] / 100000000  # Convert satoshis to BTC
+                    amount_usd = amount_btc * btc_price
+                    
+                    # Allow 1% tolerance for price fluctuations
+                    if expected_amount <= amount_usd:
+                        print("here 2")
+                        # Verify confirmation status
+                        if 'block' in tx_data and not tx_data['deleted']:
+                            print("here 3")
+                            return True
+                        
             return False
-        
-        data = response.json()
-        
-        # Check confirmations
-        if data['status']['block_height'] is None:
-            return False  # Transaction not confirmed
-        
-        # Get block height
-        block_height = data['status']['block_height']
-        current_height = requests.get("https://blockstream.info/api/blocks/tip/height").json()
-        confirmations = current_height - block_height + 1
-        
-        if confirmations < min_confirmations:
+            
+        except Exception as e:
+            print(f"Error verifying BTC transaction: {e}")
             return False
-        
-        # Check if any output matches our address and amount
-        for output in data['vout']:
-            if output['scriptpubkey_address'] == address:
-                # Convert satoshis to BTC
-                amount = output['value'] / 100000000
-                if abs(amount - expected_amount) < 0.00000001:  # Allow for small floating point differences
-                    return True
-        
-        return False
 
     @staticmethod
     async def _verify_eth_transaction(tx_id: str, address: str, expected_amount: float, min_confirmations: int) -> bool:
-        """Verify Ethereum transaction using Etherscan API"""
-        api_key = API_KEYS['ETHERSCAN_API_KEY']
-        if not api_key:
-            print("Etherscan API key not configured")
+        """Verify Ethereum transaction using Ethplorer API"""
+        try:
+            # Use Ethplorer API
+            url = f"https://api.ethplorer.io/getTxInfo/{tx_id}?apiKey=freekey"
+            response = requests.get(url)
+            if response.status_code != 200:
+                return False
+            
+            data = response.json()
+            
+            # Check if transaction was successful
+            if data["success"] == False:
+                return False
+            
+                
+            # Check confirmations
+            if data['confirmations'] < min_confirmations:
+                return False
+            
+            # Check for token transfers in operations
+            if data['operations']:
+                for op in data['operations']:
+                    if op['to'] == address:
+                        # Get value and adjust for decimals
+                        if op['tokenInfo']:
+                            decimals = int(op['tokenInfo']['decimals'])
+                            value = float(op['value']) / (10 ** decimals)
+                            # Convert to USD if price info is available
+                            if 'usdPrice' in op:
+                                value = value * op['usdPrice']
+                                # Allow 1% tolerance for price fluctuations
+                                if round(expected_amount) <= round(value):
+                                    return True
+            
+            # Check for direct ETH transfer
+            elif data.get('value') and data.get('to', '').lower() == address.lower():
+                value = float(data['value']) / 1e18  # Convert from wei to ETH
+                # You would need to get current ETH price here for USD conversion
+                # For simplicity, we're just comparing ETH value
+                if abs(value - expected_amount) <= (expected_amount * 0.01):
+                    print("Returning True")
+                    return True
+            
             return False
             
-        url = f"https://api.etherscan.io/api?module=proxy&action=eth_getTransactionByHash&txhash={tx_id}&apikey={api_key}"
-        response = requests.get(url)
-        if response.status_code != 200:
+        except Exception as e:
+            print(f"Error verifying ETH transaction: {e}")
             return False
-        
-        data = response.json()
-        if data['result'] is None:
-            return False
-        
-        # Get transaction receipt to check confirmations
-        receipt_url = f"https://api.etherscan.io/api?module=proxy&action=eth_getTransactionReceipt&txhash={tx_id}&apikey={api_key}"
-        receipt_response = requests.get(receipt_url)
-        if receipt_response.status_code != 200:
-            return False
-        
-        receipt_data = receipt_response.json()
-        if receipt_data['result'] is None:
-            return False
-        
-        # Check confirmations
-        current_block = int(requests.get(f"https://api.etherscan.io/api?module=proxy&action=eth_blockNumber&apikey={api_key}").json()['result'], 16)
-        tx_block = int(receipt_data['result']['blockNumber'], 16)
-        confirmations = current_block - tx_block
-        
-        if confirmations < min_confirmations:
-            return False
-        
-        # Check address and amount
-        tx_data = data['result']
-        if tx_data['to'].lower() == address.lower():
-            # Convert wei to ETH
-            amount = int(tx_data['value'], 16) / 1e18
-            if abs(amount - expected_amount) < 0.00000001:
-                return True
-        
-        return False
 
     @staticmethod
     async def _verify_ltc_transaction(tx_id: str, address: str, expected_amount: float, min_confirmations: int) -> bool:
-        """Verify Litecoin transaction using Blockchair API"""
-        api_key = API_KEYS['BLOCKCHAIR_API_KEY']
-        if not api_key:
-            print("Blockchair API key not configured")
+        """Verify Litecoin transaction using litecoinspace.org API"""
+        try:
+            # Get transaction details from litecoinspace.org
+            tx_url = f"https://litecoinspace.org/api/tx/{tx_id}"
+            tx_response = requests.get(tx_url)
+            if tx_response.status_code != 200:
+                return False
+            
+            tx_data = tx_response.json()
+            
+            # Get current LTC price from bitaps
+            price_url = "https://ltc.bitaps.com/js/get/update"
+            price_response = requests.post(price_url)
+            if price_response.status_code != 200:
+                return False
+            
+            price_data = price_response.json()
+            ltc_price = float(price_data['average']['dollars'].replace(" ", "") + "." + price_data['average']['cents'])
+            
+            # Verify recipient and amount
+            for output in tx_data['vout']:
+                if output['scriptpubkey_address'] == address:
+                    amount_ltc = output['value'] / 100000000  # Convert litoshis to LTC
+                    amount_usd = amount_ltc * ltc_price
+                    
+                    # Allow 1% tolerance for price fluctuations
+                    if expected_amount <= amount_usd:
+                        # Verify confirmation status
+                        if tx_data['status']['confirmed']:
+                            return True
+            
             return False
             
-        url = f"https://api.blockchair.com/litecoin/dashboards/transaction/{tx_id}?key={api_key}"
-        response = requests.get(url)
-        if response.status_code != 200:
+        except Exception as e:
+            print(f"Error verifying LTC transaction: {e}")
             return False
-        
-        data = response.json()
-        if not data['data']:
-            return False
-        
-        tx_data = data['data'][tx_id]
-        
-        # Check confirmations
-        current_height = requests.get(f"https://api.blockchair.com/litecoin/stats?key={api_key}").json()['data']['blocks']
-        confirmations = current_height - tx_data['transaction']['block_id'] + 1
-        
-        if confirmations < min_confirmations:
-            return False
-        
-        # Check outputs
-        for output in tx_data['outputs']:
-            if output['recipient'] == address:
-                amount = output['value'] / 1e8  # Convert to LTC
-                if abs(amount - expected_amount) < 0.00000001:
-                    return True
-        
-        return False
 
     @staticmethod
     async def _verify_sol_transaction(tx_id: str, address: str, expected_amount: float, min_confirmations: int) -> bool:
@@ -183,4 +203,4 @@ class BlockchainVerifier:
                 if abs(amount - expected_amount) < 0.00000001:
                     return True
         
-        return False 
+        return False

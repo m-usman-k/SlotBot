@@ -34,30 +34,29 @@ TICKET_ADMIN_ROLES = []  # Add role IDs here
 # Crypto payment configuration
 CRYPTO_ADDRESSES = {
     "Bitcoin": {
-        "address": "kjfdlsa",  # Add your BTC address
+        "address": "17pK5x3GWHy1miX7W6u3mi5JE6Cp2U9Z1S",  # Add your BTC address
         "network": "BTC",
-        "min_confirmations": 1
+        "min_confirmations": 0
     },
     "Ethereum": {
-        "address": "fdsafds",  # Add your ETH address
+        "address": "0x9ea79aba6994f68f58ccd82cc542531cbd20e451",
         "network": "ETH",
-        "min_confirmations": 12
+        "min_confirmations": 0
     },
     "Litecoin": {
-        "address": "fdsafdsa",  # Add your LTC address
+        "address": "LQwbKixbqbTuzk4cZtdw8R3rBPzSsMBto4",  # Add your LTC address
         "network": "LTC",
-        "min_confirmations": 6
+        "min_confirmations": 0
     },
     "Solana": {
         "address": "fdafdsa",  # Add your SOL address
         "network": "SOL",
-        "min_confirmations": 1
+        "min_confirmations": 0
     }
 }
 
 # API Keys for blockchain verification
 API_KEYS = {
-    "ETHERSCAN_API_KEY": "YOUR_ETHERSCAN_API_KEY",  # Add your Etherscan API key
     "BLOCKCHAIR_API_KEY": "YOUR_BLOCKCHAIR_API_KEY",  # Add your Blockchair API key
     "SOLSCAN_API_KEY": "YOUR_SOLSCAN_API_KEY"  # Add your Solscan API key
 }

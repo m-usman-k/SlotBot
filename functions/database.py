@@ -349,39 +349,6 @@ def update_ticket_payment(ticket_id: int, points_amount: int, price_eur: float, 
         except:
             return False
 
-def verify_transaction(ticket_id: int, transaction_id: str) -> bool:
-    with db_connection() as conn:
-        try:
-            cursor = conn.cursor()
-            
-            # Get ticket info
-            cursor.execute("SELECT user_id, points_amount, crypto_type, status FROM tickets WHERE id = ?", (ticket_id,))
-            ticket = cursor.fetchone()
-            if not ticket or ticket[3] != 'pending':
-                return False
-            
-            # TODO: Implement actual blockchain verification here
-            # For now, we'll just accept any transaction ID
-            
-            # Update ticket status
-            cursor.execute("""
-                UPDATE tickets 
-                SET status = 'completed',
-                    transaction_id = ?
-                WHERE id = ?
-            """, (transaction_id, ticket_id))
-            
-            # Add points to user
-            cursor.execute("""
-                INSERT INTO users (id, points) 
-                VALUES (?, ?)
-                ON CONFLICT(id) DO UPDATE SET points = points + ?
-            """, (ticket[0], ticket[1], ticket[1]))
-            
-            return True
-        except:
-            return False
-
 def get_ticket_info(ticket_id: int) -> tuple:
     with db_connection() as conn:
         cursor = conn.cursor()
