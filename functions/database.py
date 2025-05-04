@@ -1,12 +1,39 @@
 import sqlite3
+import json
+import os
 
 from config import SUPREME_USER
 from config import DATABASE_PATH
 from config import CRYPTO_ADDRESSES
 
+TRX_IDS_FILE = os.path.join(os.path.dirname(DATABASE_PATH), "trx_ids.json")
+
 def db_connection():
     conn = sqlite3.connect(database=DATABASE_PATH)
     return conn
+
+def load_trx_ids() -> set:
+    """Load transaction IDs from the JSON file."""
+    if not os.path.exists(TRX_IDS_FILE):
+        with open(TRX_IDS_FILE, "w") as file:
+            json.dump([], file)
+    with open(TRX_IDS_FILE, "r") as file:
+        return set(json.load(file))
+
+def save_trx_id(trx_id: str) -> bool:
+    """Save a transaction ID to the JSON file."""
+    trx_ids = load_trx_ids()
+    if trx_id in trx_ids:
+        return False  # Transaction ID already exists
+    trx_ids.add(trx_id)
+    with open(TRX_IDS_FILE, "w") as file:
+        json.dump(list(trx_ids), file)
+    return True
+
+def is_transaction_id_used(trx_id: str) -> bool:
+    """Check if a transaction ID has already been used."""
+    trx_ids = load_trx_ids()
+    return trx_id in trx_ids
 
 def setup_crypto_payment_methods():
     with db_connection() as conn:
@@ -41,7 +68,8 @@ def setup_tables():
                 default_name TEXT NOT NULL,
                 occupied BOOLEAN DEFAULT 0,
                 occupied_by INT DEFAULT 0,
-                occupied_till INT DEFAULT 0
+                occupied_till INT DEFAULT 0,
+                pings_left INT DEFAULT 3
             )
         """)
 
@@ -52,6 +80,13 @@ def setup_tables():
                 trigger_value TEXT NOT NULL,
                 type TEXT NOT NULL)
         """)
+
+        # Add pings_left column if it doesn't exist
+        try:
+            cursor.execute("ALTER TABLE slots ADD COLUMN pings_left INT DEFAULT 3")
+        except sqlite3.OperationalError:
+            # Column already exists, ignore error
+            pass
 
         cursor.close()
         
@@ -179,7 +214,7 @@ def get_slot_info(slot_id: int) -> tuple:
     with db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(f"""
-            SELECT points, default_name, occupied, occupied_by, occupied_till 
+            SELECT points, default_name, occupied, occupied_by, occupied_till, pings_left 
             FROM slots WHERE id = {slot_id}
         """)
         return cursor.fetchone()
@@ -209,7 +244,8 @@ def purchase_slot(slot_id: int, user_id: int, duration_seconds: int, points_cost
                 UPDATE slots 
                 SET occupied = 1, 
                     occupied_by = {user_id}, 
-                    occupied_till = {end_time} 
+                    occupied_till = {end_time},
+                    pings_left = 3 
                 WHERE id = {slot_id}
             """)
             
@@ -362,7 +398,19 @@ def get_user_tickets(user_id: int) -> list:
         return cursor.fetchall()
 
 def is_transaction_id_used(transaction_id: str) -> bool:
+    """Check if a transaction ID has already been used."""
+    trx_ids = load_trx_ids()
+    return transaction_id in trx_ids
+
+def update_slot_pings(slot_id: int, pings_left: int) -> bool:
     with db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT 1 FROM tickets WHERE transaction_id = ?", (transaction_id,))
-        return cursor.fetchone() is not None
+        try:
+            cursor = conn.cursor()
+            cursor.execute(f"""
+                UPDATE slots 
+                SET pings_left = {pings_left}
+                WHERE id = {slot_id}
+            """)
+            return True
+        except:
+            return False

@@ -4,6 +4,7 @@ from discord import app_commands
 
 from functions.display import *
 from functions.database import *
+from config import SUPREME_USER  # Import SUPREME_USER from the config
 
 
 class Admin(commands.Cog):
@@ -46,20 +47,20 @@ class Admin(commands.Cog):
             return await points_error(interaction=interaction)
         
 
-    @app_commands.command(name="add-admin", description="Admin command to add a user as an admin")
+    @app_commands.command(name="add-admin", description="Supreme user command to add a user as an admin")
     async def add_admin(self, interaction: discord.Interaction, user: discord.User):
-        if not user_admin(id=interaction.user.id):
-            return await user_forbidden(interaction=interaction)
+        if interaction.user.id != SUPREME_USER:  # Check if the user is the supreme user
+            return await user_forbidden(interaction=interaction, ephemeral=True)
 
         if set_admin(id=user.id, is_admin=True):
             await admin_added(interaction=interaction, user=user)
         else:
             await admin_add_failed(interaction=interaction)
 
-    @app_commands.command(name="rem-admin", description="Admin command to remove an admin")
+    @app_commands.command(name="rem-admin", description="Supreme user command to remove an admin")
     async def rem_admin(self, interaction: discord.Interaction):
-        if not user_admin(id=interaction.user.id):
-            return await user_forbidden(interaction=interaction)
+        if interaction.user.id != SUPREME_USER:  # Check if the user is the supreme user
+            return await user_forbidden(interaction=interaction, ephemeral=True)
 
         admins = get_admins()
         if not admins:
@@ -80,9 +81,11 @@ class Admin(commands.Cog):
         await admin_selection_embed(interaction=interaction, options=options)
 
     @app_commands.command(name="add-slot", description="Admin command to add new slot")
-    async def add_slot(self, interaction: discord.Interaction, channel: discord.TextChannel, price_points: int, default_name: str):
+    async def add_slot(self, interaction: discord.Interaction, channel: discord.TextChannel, default_name: str):
         if not user_admin(id=interaction.user.id):
             return await user_forbidden(interaction=interaction)
+        
+        price_points = 1
 
         if price_points <= 0:
             return await neg_number(interaction=interaction)

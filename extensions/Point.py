@@ -3,10 +3,18 @@ from discord.ext import commands
 from discord import app_commands
 import time
 import asyncio
+from discord.app_commands import CheckFailure
 
 from functions.display import *
 from functions.database import *
-from config import DURATION_CONFIG, POINTS_PRICES, TICKET_CATEGORY_ID, TICKET_NAME_FORMAT, TICKET_ADMIN_ROLES
+from config import DURATION_CONFIG, POINTS_PRICES, TICKET_CATEGORY_ID, TICKET_NAME_FORMAT, TICKET_ADMIN_ROLES, SLOT_CONFIG
+
+def is_admin():
+    async def predicate(interaction: discord.Interaction) -> bool:
+        if user_admin(interaction.user.id):
+            return True
+        raise CheckFailure("You do not have the required permissions to run this command.")
+    return app_commands.check(predicate)
 
 class SlotPurchaseSelect(discord.ui.Select):
     def __init__(self, slots: list):
@@ -23,13 +31,16 @@ class SlotPurchaseSelect(discord.ui.Select):
         )
 
     async def callback(self, interaction: discord.Interaction):
+        slot_id = int(self.values[0])
+        from config import DURATION_CONFIG
+        slot_durations = [(key, DURATION_CONFIG[key]) for key in DURATION_CONFIG]  # Prepare slot durations
         await interaction.response.send_message(
             embed=discord.Embed(
                 title="⏱️ Select Duration",
                 description="Choose how long you want to rent this slot:",
                 color=discord.Color.blue()
             ),
-            view=SlotDurationView(int(self.values[0])),
+            view=SlotDurationView(slot_id, slot_durations, self.view.cog),  # Pass required arguments
             ephemeral=True
         )
 
@@ -38,10 +49,10 @@ class SlotDurationSelect(discord.ui.Select):
         self.slot_id = slot_id
         options = [
             discord.SelectOption(
-                label=name,
-                description=f"Buy {name} for {points} Points",
+                label=duration["name"],
+                description=f"Buy {duration['name']} for {duration['points']} Points",
                 value=key
-            ) for key, (seconds, name, points) in slot_durations
+            ) for key, duration in slot_durations
         ]
         super().__init__(placeholder="Duration you want to buy", options=options)
 
@@ -62,16 +73,16 @@ class SlotDurationSelect(discord.ui.Select):
             duration = self.values[0]
             slot_info = get_slot_info(self.slot_id)
             if not slot_info:
-                await slot_purchase_failed(interaction, "Invalid slot ID!")
+                await slot_purchase_failed(interaction, "Invalid slot ID!", ephemeral=True)
                 return
-            points_per_duration, default_name, occupied, occupied_by, occupied_till = slot_info
+            points_per_duration, default_name, occupied, occupied_by, occupied_till, pings_left = slot_info
             if occupied:
-                await slot_purchase_failed(interaction, "This slot is currently occupied!")
+                await slot_purchase_failed(interaction, "This slot is currently occupied!", ephemeral=True)
                 return
-            duration_seconds, duration_name = DURATION_CONFIG[duration][:2]
-            points_cost = int(points_per_duration * (duration_seconds / 3600))
+            duration_info = DURATION_CONFIG[duration]
+            duration_seconds = duration_info["seconds"]
+            points_cost = duration_info["points"]
             if purchase_slot(self.slot_id, interaction.user.id, duration_seconds, points_cost):
-                self.view.cog.pings_left_per_slot[self.slot_id] = 3  # Reset pings on purchase
                 await self.view.display_claimed(interaction, self.slot_id, interaction.user)
             else:
                 await interaction.response.send_message(
@@ -94,15 +105,16 @@ class SlotDurationSelect(discord.ui.Select):
 
 class SlotDurationView(discord.ui.View):
     def __init__(self, slot_id: int, slot_durations: list, cog):
-        super().__init__()
+        super().__init__(timeout=None)  # Make the view persistent
         self.add_item(SlotDurationSelect(slot_id, slot_durations))
         self.cog = cog
+
     async def display_claimed(self, interaction, slot_id, user):
         await self.cog.display_claimed(interaction, slot_id, user)
 
 class SlotClaimedView(discord.ui.View):
     def __init__(self, owner_id, cog, slot_id, username, available_until, claimed_message=None, claimed_embed=None, info_message=None):
-        super().__init__(timeout=None)
+        super().__init__(timeout=None)  # Make the view persistent
         self.owner_id = owner_id
         self.cog = cog
         self.slot_id = slot_id
@@ -111,11 +123,12 @@ class SlotClaimedView(discord.ui.View):
         self.claimed_message = claimed_message
         self.claimed_embed = claimed_embed
         self.info_message = info_message
+
     @discord.ui.button(label="Setup Slot", style=discord.ButtonStyle.primary)
     async def setup_slot(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
             if interaction.user.id != self.owner_id:
-                await user_forbidden(interaction)
+                await user_forbidden(interaction, ephemeral=True)
                 return
             setup_embed = discord.Embed(
                 title="Slot Setup",
@@ -133,14 +146,18 @@ class SlotClaimedView(discord.ui.View):
                 ),
                 ephemeral=True
             )
+
     @discord.ui.button(label="Use Ping", style=discord.ButtonStyle.secondary)
     async def use_ping(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
             if interaction.user.id != self.owner_id:
-                await user_forbidden(interaction)
+                await user_forbidden(interaction, ephemeral=True)
                 return
-            # Ping tracking
-            pings_left = self.cog.pings_left_per_slot.get(self.slot_id, 3)
+            # Get current pings from database
+            slot_info = get_slot_info(self.slot_id)
+            if not slot_info:
+                return
+            pings_left = slot_info[5]
             if pings_left <= 0:
                 await interaction.response.send_message(
                     embed=discord.Embed(
@@ -151,8 +168,8 @@ class SlotClaimedView(discord.ui.View):
                     ephemeral=True
                 )
                 return
-            await display_slot_ping(interaction.channel, interaction.user)
-            self.cog.pings_left_per_slot[self.slot_id] = pings_left - 1
+            # Update pings in database
+            update_slot_pings(self.slot_id, pings_left - 1)
             # Update info embed
             info_embed = discord.Embed(
                 title="Slot Information",
@@ -160,6 +177,13 @@ class SlotClaimedView(discord.ui.View):
                 color=discord.Color.blue()
             )
             await self.info_message.edit(embed=info_embed, view=self)
+            # Send ping message with embed
+            ping_embed = discord.Embed(
+                title="Ping Used",
+                description=f"{interaction.user.mention} used a Ping and now has {pings_left - 1} Pings left",
+                color=discord.Color.green()
+            )
+            await interaction.channel.send(content="@everyone", embed=ping_embed)
             await interaction.response.send_message(
                 embed=discord.Embed(
                     title="✅ Ping Sent",
@@ -281,7 +305,6 @@ class Point(commands.Cog):
         self.bot = bot
         create_ticket_tables()
         self.slot_check_task = self.bot.loop.create_task(self.check_slot_times())
-        self.pings_left_per_slot = {}  # {slot_id: pings_left}
 
     def cog_unload(self):
         if self.slot_check_task:
@@ -293,22 +316,22 @@ class Point(commands.Cog):
             try:
                 slots = get_slots()
                 current_time = int(time.time())
-                from config import DURATION_CONFIG
                 for slot_id in slots:
                     slot_info = get_slot_info(slot_id)
                     if not slot_info:
                         continue
-                    points_per_duration, default_name, occupied, occupied_by, occupied_till = slot_info
+                    points_per_duration, default_name, occupied, occupied_by, occupied_till, pings_left = slot_info
                     if points_per_duration is None:
                         print(f"Warning: Slot {slot_id} has no points_per_duration set. Skipping.")
                         continue
-                    slot_durations = [(key, (seconds, name, int(points_per_duration * (seconds / 3600)))) for key, (seconds, name) in DURATION_CONFIG.items()]
+                    slot_durations = [(key, DURATION_CONFIG[key]) for key in DURATION_CONFIG]
                     channel = self.bot.get_channel(slot_id)
                     if occupied and occupied_till and current_time >= occupied_till:
                         if channel:
                             try:
                                 await delete_all_messages(channel)
-                                await display_slot_available(channel, slot_id, slot_durations, SlotDurationView(slot_id, slot_durations, self))
+                                view = SlotDurationView(slot_id, slot_durations, self)
+                                await display_slot_available(channel, slot_id, slot_durations, view)
                                 await channel.edit(name=default_name)
                                 with db_connection() as conn:
                                     cursor = conn.cursor()
@@ -316,30 +339,29 @@ class Point(commands.Cog):
                                         UPDATE slots 
                                         SET occupied = 0, 
                                             occupied_by = 0, 
-                                            occupied_till = 0 
+                                            occupied_till = 0,
+                                            pings_left = {SLOT_CONFIG['default_pings']} 
                                         WHERE id = {slot_id}
                                     """)
-                                self.pings_left_per_slot[slot_id] = 3  # Reset pings on expire
                             except Exception as e:
                                 print(f"Error resetting slot {slot_id}: {e}")
             except Exception as e:
                 print(f"Error in slot check loop: {e}")
-            await asyncio.sleep(60)
+            await asyncio.sleep(10)
 
     async def cog_load(self):
         # On cog load (bot startup), delete all messages and send available embed for every slot channel
         await self.bot.wait_until_ready()
         slots = get_slots()
-        from config import DURATION_CONFIG
         for slot_id in slots:
-            slot_info = get_slot_info(slot_id)
+            slot_info = get_slot_info(slot_id)  # Retrieve slot information here
             if not slot_info:
                 continue
-            points_per_duration, default_name, occupied, occupied_by, occupied_till = slot_info
+            points_per_duration, default_name, occupied, occupied_by, occupied_till, pings_left = slot_info
             if points_per_duration is None:
                 print(f"Warning: Slot {slot_id} has no points_per_duration set. Skipping.")
                 continue
-            slot_durations = [(key, (seconds, name, int(points_per_duration * (seconds / 3600)))) for key, (seconds, name) in DURATION_CONFIG.items()]
+            slot_durations = [(key, DURATION_CONFIG[key]) for key in DURATION_CONFIG]
             channel = self.bot.get_channel(slot_id)
             if channel:
                 try:
@@ -409,7 +431,7 @@ class Point(commands.Cog):
         for points, price in POINTS_PRICES.items():
             embed.add_field(
                 name=f"{points} Points",
-                value=f"Price: {price}€",
+                value=f"Price: {price}$",
                 inline=True
             )
 
@@ -423,34 +445,7 @@ class Point(commands.Cog):
             ephemeral=True
         )
 
-    @app_commands.command(name="buy-slot", description="Buy a slot for a specific duration")
-    async def buy_slot(self, interaction: discord.Interaction):
-        # Check if user already has a slot
-        current_slot = get_user_slot(interaction.user.id)
-        if current_slot:
-            return await slot_purchase_failed(interaction, "You already have an active slot!")
-
-        # Get available slots
-        slots = get_slots()
-        if not slots:
-            return await slot_purchase_failed(interaction, "No slots are currently available!")
         
-        slot_info = []
-        for slot_id in slots:
-            info = get_slot_info(slot_id)
-            if info:
-                slot_info.append((slot_id, *info[:3]))
-
-        await interaction.response.send_message(
-            embed=discord.Embed(
-                title="🎰 Purchase Slot",
-                description="Select a slot to purchase:",
-                color=discord.Color.blue()
-            ),
-            view=SlotPurchaseView(slot_info),
-            ephemeral=True
-        )
-
     @app_commands.command(name="check-slots", description="Check available slots")
     async def check_slots(self, interaction: discord.Interaction):
         slots = get_slots()
@@ -487,8 +482,11 @@ class Point(commands.Cog):
         )
 
     async def display_claimed(self, interaction, slot_id, user):
-        pings_left = self.pings_left_per_slot.get(slot_id, 3)
-        available_until = "<timestamp>"
+        slot_info = get_slot_info(slot_id)
+        if not slot_info:
+            return
+        pings_left = slot_info[5]  # Get pings_left from database
+        available_until_ts = slot_info[4]  # occupied_till
         username = user.name
         owner_id = user.id
         claimed_embed = discord.Embed(
@@ -496,6 +494,11 @@ class Point(commands.Cog):
             description="No Shop setup yet",
             color=discord.Color.purple()
         )
+        # Format the timestamp for Discord
+        if available_until_ts and available_until_ts > 0:
+            available_until = f"<t:{available_until_ts}:R>"
+        else:
+            available_until = "N/A"
         info_embed = discord.Embed(
             title="Slot Information",
             description=f"**Pings Left - {pings_left}**\nSlot available {available_until}",
@@ -509,7 +512,6 @@ class Point(commands.Cog):
             owner_id, self, slot_id, username, available_until, claimed_message=claimed_message, claimed_embed=claimed_embed, info_message=info_message
         )
         await info_message.edit(view=view)
-        self.pings_left_per_slot[slot_id] = pings_left
 
     async def display_setup(self, interaction, slot_id, ephemeral=False):
         view = SetupSelectView(self, slot_id)
@@ -535,6 +537,96 @@ class Point(commands.Cog):
             )
         else:
             await display_slot_setup_options(interaction.channel, view)
+
+    @app_commands.command(name="add-pings", description="Add pings to a user's slot (Admin only)")
+    @is_admin()
+    async def add_pings(self, interaction: discord.Interaction, user: discord.User, amount: int):
+        # Check if user has an active slot
+        current_slot = get_user_slot(user.id)
+        if not current_slot:
+            await interaction.response.send_message(
+                embed=discord.Embed(
+                    title="❌ Error",
+                    description="This user doesn't have an active slot!",
+                    color=discord.Color.red()
+                ),
+                ephemeral=True
+            )
+            return
+
+        slot_id = current_slot[0]
+        slot_info = get_slot_info(slot_id)
+        if not slot_info:
+            return
+
+        # Get current pings and add the new amount
+        current_pings = slot_info[5]  # pings_left is at index 5
+        new_pings = current_pings + amount
+        update_slot_pings(slot_id, new_pings)
+
+        # Update the embed message
+        channel = self.bot.get_channel(slot_id)
+        if channel:
+            async for message in channel.history(limit=10):
+                if message.embeds and "Slot Information" in message.embeds[0].title:
+                    embed = message.embeds[0]
+                    embed.description = f"**Pings Left - {new_pings}**\nSlot available {embed.description.split('Slot available')[1]}"
+                    await message.edit(embed=embed)
+                    break
+
+        await interaction.response.send_message(
+            embed=discord.Embed(
+                title="✅ Pings Added",
+                description=f"Added {amount} pings to {user.mention}'s slot. They now have {new_pings} pings left.",
+                color=discord.Color.green()
+            ),
+            ephemeral=True
+        )
+
+    @app_commands.command(name="remove-pings", description="Remove pings from a user's slot (Admin only)")
+    @is_admin()
+    async def remove_pings(self, interaction: discord.Interaction, user: discord.User, amount: int):
+        # Check if user has an active slot
+        current_slot = get_user_slot(user.id)
+        if not current_slot:
+            await interaction.response.send_message(
+                embed=discord.Embed(
+                    title="❌ Error",
+                    description="This user doesn't have an active slot!",
+                    color=discord.Color.red()
+                ),
+                ephemeral=True
+            )
+            return
+
+        slot_id = current_slot[0]
+        slot_info = get_slot_info(slot_id)
+        if not slot_info:
+            return
+
+        # Get current pings and remove the amount
+        current_pings = slot_info[5]  # pings_left is at index 5
+        new_pings = max(0, current_pings - amount)  # Ensure pings don't go below 0
+        update_slot_pings(slot_id, new_pings)
+
+        # Update the embed message
+        channel = self.bot.get_channel(slot_id)
+        if channel:
+            async for message in channel.history(limit=10):
+                if message.embeds and "Slot Information" in message.embeds[0].title:
+                    embed = message.embeds[0]
+                    embed.description = f"**Pings Left - {new_pings}**\nSlot available {embed.description.split('Slot available')[1]}"
+                    await message.edit(embed=embed)
+                    break
+
+        await interaction.response.send_message(
+            embed=discord.Embed(
+                title="✅ Pings Removed",
+                description=f"Removed {amount} pings from {user.mention}'s slot. They now have {new_pings} pings left.",
+                color=discord.Color.green()
+            ),
+            ephemeral=True
+        )
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(Point(bot=bot))

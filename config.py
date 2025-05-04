@@ -3,13 +3,41 @@ SUPREME_USER = 1155936906274672730  # Replace with your ID
 
 # Slot duration configurations
 DURATION_CONFIG = {
-    "10min": (600, "10 Minutes"),
-    "30min": (1800, "30 Minutes"),
-    "1h": (3600, "1 Hour"),
-    "3h": (10800, "3 Hours"),
-    "6h": (21600, "6 Hours"),
-    "12h": (43200, "12 Hours"),
-    "1d": (86400, "1 Day")
+    "10min": {
+        "seconds": 600,
+        "name": "10 Minutes",
+        "points": 1  # 100 points per hour / 6 (since 10min is 1/6 of an hour)
+    },
+    "30min": {
+        "seconds": 1800,
+        "name": "30 Minutes",
+        "points": 50  # 100 points per hour / 2
+    },
+    "1h": {
+        "seconds": 3600,
+        "name": "1 Hour",
+        "points": 100  # Base rate
+    },
+    "3h": {
+        "seconds": 10800,
+        "name": "3 Hours",
+        "points": 250  # Slight discount for longer durations
+    },
+    "6h": {
+        "seconds": 21600,
+        "name": "6 Hours",
+        "points": 450  # More discount
+    },
+    "12h": {
+        "seconds": 43200,
+        "name": "12 Hours",
+        "points": 800  # Even more discount
+    },
+    "1d": {
+        "seconds": 86400,
+        "name": "1 Day",
+        "points": 1500  # Best discount
+    }
 }
 
 # Points prices in EUR
@@ -34,23 +62,18 @@ TICKET_ADMIN_ROLES = []  # Add role IDs here
 # Crypto payment configuration
 CRYPTO_ADDRESSES = {
     "Bitcoin": {
-        "address": "17pK5x3GWHy1miX7W6u3mi5JE6Cp2U9Z1S",  # Add your BTC address
+        "address": "bc1qrk6npzzz74uwjntz4wpw3kmc2ncwt65ejd9spn",
         "network": "BTC",
         "min_confirmations": 0
     },
     "Ethereum": {
-        "address": "0x9ea79aba6994f68f58ccd82cc542531cbd20e451",
+        "address": "0xd3878E1ee4b6373bA2053B5f8ADF965650E8e21A",
         "network": "ETH",
         "min_confirmations": 0
     },
     "Litecoin": {
-        "address": "LQwbKixbqbTuzk4cZtdw8R3rBPzSsMBto4",  # Add your LTC address
+        "address": "LKLCiG6iM48fZgzrdTqG5Q9hhjYQ3GbK36",  # Add your LTC address
         "network": "LTC",
-        "min_confirmations": 0
-    },
-    "Solana": {
-        "address": "fdafdsa",  # Add your SOL address
-        "network": "SOL",
         "min_confirmations": 0
     }
 }
@@ -69,4 +92,11 @@ VERIFICATION_SETTINGS = {
     "max_wait_time": 3600,          # Maximum time to wait for confirmation (in seconds)
     "retry_interval": 60,           # How often to retry verification (in seconds)
     "max_retries": 60               # Maximum number of retries before giving up
+}
+
+# Slot configurations
+SLOT_CONFIG = {
+    "default_pings": 3,             # Default number of pings when slot is purchased
+    "points_per_hour": 100,         # Points cost per hour of slot rental
+    "default_name": "Available Slot" # Default name for available slots
 }

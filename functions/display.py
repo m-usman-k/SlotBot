@@ -4,13 +4,13 @@ from discord.ext import commands
 from functions.database import *
 from functions.blockchain import BlockchainVerifier
 
-async def user_forbidden(interaction: discord.Interaction):
+async def user_forbidden(interaction: discord.Interaction, ephemeral: bool = False):
     embed = discord.Embed(
         title="🟥 Forbidden",
         description="You do not have permission to perform this action.",
         color=discord.Color.red()
     )
-    await interaction.response.send_message(embed=embed)
+    await interaction.response.send_message(embed=embed, ephemeral=ephemeral)
 
 async def neg_number(interaction: discord.Interaction):
     embed = discord.Embed(
@@ -140,18 +140,18 @@ async def slot_purchase_success(interaction: discord.Interaction, slot_id: int, 
     )
     await interaction.response.send_message(embed=embed)
 
-async def slot_purchase_failed(interaction: discord.Interaction, reason: str):
+async def slot_purchase_failed(interaction: discord.Interaction, reason: str, ephemeral: bool = False):
     embed = discord.Embed(
         title="❌ Slot Purchase Failed",
         description=reason,
         color=discord.Color.red()
     )
-    await interaction.response.send_message(embed=embed)
+    await interaction.response.send_message(embed=embed, ephemeral=ephemeral)
 
 async def payment_ticket_created(interaction: discord.Interaction, ticket_id: int, points: int, price: float, addresses: dict):
     embed = discord.Embed(
         title="💰 Payment Ticket Created",
-        description=f"Please send {price}€ worth of crypto to one of the following addresses:",
+        description=f"Please send {price}$ worth of crypto to one of the following addresses:",
         color=discord.Color.blue()
     )
     
@@ -179,7 +179,7 @@ async def display_available_slots(interaction: discord.Interaction, slots: list)
         status = "🔴 Occupied" if occupied else "🟢 Available"
         embed.add_field(
             name=f"Slot {slot_id} - {name}",
-            value=f"Status: {status}\nPoints: {points}",
+            value=f"Status: {status}",
             inline=False
         )
     
@@ -236,8 +236,7 @@ class TransactionModal(discord.ui.Modal):
         self.add_item(self.tx_id)
 
     async def on_submit(self, interaction: discord.Interaction):
-        from functions.blockchain import BlockchainVerifier
-        from functions.database import is_transaction_id_used, add_points
+        from functions.database import is_transaction_id_used, save_trx_id, add_points
         
         # Get ticket ID from channel name
         ticket_id = int(interaction.channel.name.split('-')[-1])
@@ -264,16 +263,28 @@ class TransactionModal(discord.ui.Modal):
         if is_valid:
             # Add points to user
             if add_points(id=interaction.user.id, points=self.points_amount):
-                # Delete the ticket channel
-                
+                # Save transaction ID to prevent reuse
+                if not save_trx_id(self.tx_id.value):
+                    await interaction.response.send_message(
+                        embed=discord.Embed(
+                            title="❌ Error",
+                            description="Failed to store transaction ID. Please contact an administrator.",
+                            color=discord.Color.red()
+                        )
+                    )
+                    return
+
                 # Send success message to user
                 await interaction.response.send_message(
                     embed=discord.Embed(
                         title="✅ Payment Verified",
-                        description=f"Your payment has been verified and {self.points_amount} points have been added to your account!",
+                        description=f"Your payment has been verified and {self.points_amount} points have been added to your account! The ticket will be closed shortly.",
                         color=discord.Color.green()
                     )
                 )
+                
+                import asyncio
+                await asyncio.sleep(10)  # Wait for 10 seconds before deleting the ticket
                 await interaction.channel.delete()
             else:
                 await interaction.response.send_message(
@@ -313,7 +324,7 @@ async def display_points_shop(interaction: discord.Interaction, cog):
     for points, price in POINTS_PRICES.items():
         embed.add_field(
             name=f"{points} Points",
-            value=f"Price: {price}€",
+            value=f"Price: {price}$",
             inline=True
         )
     
@@ -322,6 +333,7 @@ async def display_points_shop(interaction: discord.Interaction, cog):
 
 class CryptoSelect(discord.ui.Select):
     def __init__(self, addresses: dict):
+        self.row = 0
         options = [
             discord.SelectOption(
                 label=crypto_type,
@@ -340,11 +352,12 @@ class CryptoSelect(discord.ui.Select):
 
 class PointsPackageSelect(discord.ui.Select):
     def __init__(self):
+        self.row = 0
         from config import POINTS_PRICES
         options = [
             discord.SelectOption(
                 label=f"{points} Points",
-                description=f"{price}€",
+                description=f"{price}$",
                 value=str(points)
             ) for points, price in POINTS_PRICES.items()
         ]
@@ -362,7 +375,7 @@ class PointsPackageSelect(discord.ui.Select):
         await interaction.response.send_message(
             embed=discord.Embed(
                 title="✅ Points Package Selected",
-                description=f"You selected **{points} points** for **{price}€**.",
+                description=f"You selected **{points} points** for **{price}$**.",
                 color=discord.Color.green()
             ),
             ephemeral=True
@@ -377,19 +390,19 @@ class TicketView(discord.ui.View):
         self.selected_points = None
         self.selected_price = None
 
-    @discord.ui.button(label="Rename Ticket", style=discord.ButtonStyle.secondary, emoji="✏️")
+    @discord.ui.button(label="Rename Ticket", style=discord.ButtonStyle.secondary, emoji="✏️", row=2)
     async def rename_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
         modal = TicketNameModal(interaction.channel)
         await interaction.response.send_modal(modal)
 
-    @discord.ui.button(label="Close Ticket", style=discord.ButtonStyle.danger, emoji="🔒")
+    @discord.ui.button(label="Close Ticket", style=discord.ButtonStyle.danger, emoji="🔒", row=2)
     async def close_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not user_admin(interaction.user.id):
             await user_forbidden(interaction)
             return
         await interaction.channel.delete()
 
-    @discord.ui.button(label="Finish", style=discord.ButtonStyle.success, emoji="✅")
+    @discord.ui.button(label="Finish", style=discord.ButtonStyle.success, emoji="✅", row=2)
     async def finish_payment(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not self.selected_crypto:
             await interaction.response.send_message(
@@ -470,7 +483,9 @@ class SlotInfoSelect(discord.ui.Select):
         points_per_duration = slot_info[0]
         from config import DURATION_CONFIG
         durations = []
-        for duration_key, (seconds, name) in DURATION_CONFIG.items():
+        for duration_key, duration_data in DURATION_CONFIG.items():  # Correctly access nested dictionary
+            seconds = duration_data["seconds"]
+            name = duration_data["name"]
             points = int(points_per_duration * (seconds / 3600))
             durations.append((name, points))
         
@@ -492,7 +507,7 @@ async def display_slot_available(channel: discord.TextChannel, slot_id: int, dur
         description="This Slot is currently available, you can buy it by using the Select Menu below.",
         color=discord.Color.blue()
     )
-    await channel.send(embed=embed, view=view)
+    await channel.send(embed=embed, view=view)  # Attach the persistent view
 
 async def display_slot_claimed(channel: discord.TextChannel, slot_id: int, username: str, pings_left: int, available_until: str, owner_id: int, view: discord.ui.View):
     await delete_all_messages(channel)
