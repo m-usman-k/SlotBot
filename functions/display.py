@@ -483,9 +483,10 @@ class SlotInfoSelect(discord.ui.Select):
         points_per_duration = slot_info[0]
         from config import DURATION_CONFIG
         durations = []
-        for duration_key, duration_data in DURATION_CONFIG.items():  # Correctly access nested dictionary
+        for duration_key, duration_data in DURATION_CONFIG.items():
             seconds = duration_data["seconds"]
             name = duration_data["name"]
+            # Calculate points based on the slot's points_per_duration
             points = int(points_per_duration * (seconds / 3600))
             durations.append((name, points))
         

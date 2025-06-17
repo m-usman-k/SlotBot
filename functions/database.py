@@ -2,9 +2,7 @@ import sqlite3
 import json
 import os
 
-from config import SUPREME_USER
-from config import DATABASE_PATH
-from config import CRYPTO_ADDRESSES
+from config import *
 
 TRX_IDS_FILE = os.path.join(os.path.dirname(DATABASE_PATH), "trx_ids.json")
 
@@ -170,7 +168,7 @@ def get_admins() -> list:
         """)
         return [row[0] for row in cursor.fetchall()]
 
-def add_slot(channel_id: int, price_points: int, default_name: str) -> bool:
+def add_slot(channel_id: int, price_points: int, default_name: str) -> tuple:
     with db_connection() as conn:
         try:
             cursor = conn.cursor()
@@ -178,9 +176,9 @@ def add_slot(channel_id: int, price_points: int, default_name: str) -> bool:
                 INSERT INTO slots (id, points, default_name) 
                 VALUES ({channel_id}, {price_points}, '{default_name}')
             """)
-            return True
+            return (price_points, default_name, False, 0, 0, SLOT_CONFIG['default_pings'])
         except:
-            return False
+            return None
 
 def get_slots() -> list:
     with db_connection() as conn:

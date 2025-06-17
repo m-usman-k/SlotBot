@@ -2,9 +2,10 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 
+from config import *
 from functions.display import *
 from functions.database import *
-from config import SUPREME_USER  # Import SUPREME_USER from the config
+from extensions.Point import is_admin, SlotDurationView  # Import both is_admin and SlotDurationView
 
 
 class Admin(commands.Cog):
@@ -80,20 +81,27 @@ class Admin(commands.Cog):
 
         await admin_selection_embed(interaction=interaction, options=options)
 
-    @app_commands.command(name="add-slot", description="Admin command to add new slot")
-    async def add_slot(self, interaction: discord.Interaction, channel: discord.TextChannel, default_name: str):
+    @app_commands.command(name="add-slot", description="Admin command to add a slot")
+    async def add_slot(self, interaction: discord.Interaction, channel: discord.TextChannel, price_points: int, default_name: str):
         if not user_admin(id=interaction.user.id):
             return await user_forbidden(interaction=interaction)
-        
-        price_points = 1
 
-        if price_points <= 0:
-            return await neg_number(interaction=interaction)
-
-        if add_slot(channel_id=channel.id, price_points=price_points, default_name=default_name):
-            await slot_added(interaction=interaction, channel=channel, price_points=price_points, default_name=default_name)
+        if add_slot(channel.id, price_points, default_name):
+            # Get slot info for initial message
+            slot_info = get_slot_info(channel.id)
+            if slot_info:
+                slot_durations = [(key, DURATION_CONFIG[key]) for key in DURATION_CONFIG]
+                view = SlotDurationView(channel.id, slot_durations, self)
+                await delete_all_messages(channel)
+                await display_slot_available(channel, channel.id, slot_durations, view)
+            await slot_added(interaction, channel, price_points, default_name)
         else:
-            return await points_error(interaction=interaction)
+            embed = discord.Embed(
+                title="🟥 Failed to Add Slot",
+                description="An error occurred while trying to add the slot. Please try again.",
+                color=discord.Color.red()
+            )
+            await interaction.response.send_message(embed=embed)
 
     @app_commands.command(name="rem-slot", description="Admin command to remove a slot")
     async def rem_slot(self, interaction: discord.Interaction):
@@ -143,6 +151,105 @@ class Admin(commands.Cog):
         embed = discord.Embed(
             title="🛠️ Slot Removal",
             description="Select a slot to remove from the dropdown below.",
+            color=discord.Color.blue()
+        )
+        await interaction.response.send_message(embed=embed, view=SlotSelectView(self))
+
+    @app_commands.command(name="set-price", description="Set the price for a slot (Admin only)")
+    @is_admin()
+    async def set_price(self, interaction: discord.Interaction):
+        slots = get_slots()
+        if not slots:
+            embed = discord.Embed(
+                title="🟥 No Slots Found",
+                description="No slots were found to set prices for.",
+                color=discord.Color.red()
+            )
+            return await interaction.response.send_message(embed=embed)
+
+        options = [
+            discord.SelectOption(label=f"Slot {slot_id}", value=str(slot_id))
+            for slot_id in slots
+        ]
+
+        class SlotSelect(discord.ui.Select):
+            def __init__(self, outer):
+                super().__init__(placeholder="Select a slot to set price for", options=options)
+                self.outer = outer
+
+            async def callback(self, select_interaction: discord.Interaction):
+                if select_interaction.user.id != interaction.user.id:
+                    return await select_interaction.response.send_message("This selection is not for you!", ephemeral=True)
+                
+                slot_id = int(self.values[0])
+                slot_info = get_slot_info(slot_id)
+                if not slot_info:
+                    return await select_interaction.response.send_message("Failed to get slot information!", ephemeral=True)
+
+                class PriceModal(discord.ui.Modal, title="Set Slot Price"):
+                    def __init__(self, slot_id: int, current_price: int):
+                        super().__init__()
+                        self.slot_id = slot_id
+                        self.current_price = current_price
+                        self.price = discord.ui.TextInput(
+                            label="Points per hour",
+                            placeholder=f"Current price: {current_price} points/hour",
+                            required=True,
+                            min_length=1,
+                            max_length=5
+                        )
+                        self.add_item(self.price)
+
+                    async def on_submit(self, interaction: discord.Interaction):
+                        try:
+                            new_price = int(self.price.value)
+                            if new_price <= 0:
+                                raise ValueError("Price must be positive")
+                            
+                            with db_connection() as conn:
+                                cursor = conn.cursor()
+                                cursor.execute(f"""
+                                    UPDATE slots 
+                                    SET points = {new_price}
+                                    WHERE id = {self.slot_id}
+                                """)
+                            
+                            # Update the channel message
+                            channel = interaction.client.get_channel(self.slot_id)
+                            if channel:
+                                slot_durations = [(key, DURATION_CONFIG[key]) for key in DURATION_CONFIG]
+                                view = SlotDurationView(self.slot_id, slot_durations, self.outer)
+                                await delete_all_messages(channel)
+                                await display_slot_available(channel, self.slot_id, slot_durations, view)
+                            
+                            await interaction.response.send_message(
+                                embed=discord.Embed(
+                                    title="✅ Price Updated",
+                                    description=f"Slot {self.slot_id} price has been updated to {new_price} points/hour",
+                                    color=discord.Color.green()
+                                ),
+                                ephemeral=True
+                            )
+                        except ValueError:
+                            await interaction.response.send_message(
+                                embed=discord.Embed(
+                                    title="❌ Invalid Price",
+                                    description="Please enter a valid positive number for the price.",
+                                    color=discord.Color.red()
+                                ),
+                                ephemeral=True
+                            )
+
+                await select_interaction.response.send_modal(PriceModal(slot_id, slot_info[0]))
+
+        class SlotSelectView(discord.ui.View):
+            def __init__(self, outer):
+                super().__init__()
+                self.add_item(SlotSelect(outer))
+
+        embed = discord.Embed(
+            title="💰 Set Slot Price",
+            description="Select a slot to set its price from the dropdown below.",
             color=discord.Color.blue()
         )
         await interaction.response.send_message(embed=embed, view=SlotSelectView(self))
