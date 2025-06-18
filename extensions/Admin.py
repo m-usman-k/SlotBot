@@ -187,10 +187,11 @@ class Admin(commands.Cog):
                     return await select_interaction.response.send_message("Failed to get slot information!", ephemeral=True)
 
                 class PriceModal(discord.ui.Modal, title="Set Slot Price"):
-                    def __init__(self, slot_id: int, current_price: int):
+                    def __init__(self, slot_id: int, current_price: int, outer):
                         super().__init__()
                         self.slot_id = slot_id
                         self.current_price = current_price
+                        self.outer = outer
                         self.price = discord.ui.TextInput(
                             label="Points per hour",
                             placeholder=f"Current price: {current_price} points/hour",
@@ -240,7 +241,7 @@ class Admin(commands.Cog):
                                 ephemeral=True
                             )
 
-                await select_interaction.response.send_modal(PriceModal(slot_id, slot_info[0]))
+                await select_interaction.response.send_modal(PriceModal(slot_id, slot_info[0], self.outer))
 
         class SlotSelectView(discord.ui.View):
             def __init__(self, outer):

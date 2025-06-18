@@ -1,5 +1,5 @@
 DATABASE_PATH = "./databases/database.db"
-SUPREME_USER = 1155936906274672730  # Replace with your ID
+SUPREME_USER = 874033979504873512  # Replace with your ID
 
 # Slot duration configurations
 DURATION_CONFIG = {

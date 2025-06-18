@@ -47,10 +47,13 @@ class SlotPurchaseSelect(discord.ui.Select):
 class SlotDurationSelect(discord.ui.Select):
     def __init__(self, slot_id: int, slot_durations: list):
         self.slot_id = slot_id
+        # Fetch the slot's points_per_duration from the database
+        slot_info = get_slot_info(slot_id)
+        points_per_duration = slot_info[0] if slot_info else 100
         options = [
             discord.SelectOption(
                 label=duration["name"],
-                description=f"Buy {duration['name']} for {duration['points']} Points",
+                description=f"Buy {duration['name']} for {int(points_per_duration * (duration['seconds'] / 3600))} Points",
                 value=key
             ) for key, duration in slot_durations
         ]
@@ -81,7 +84,7 @@ class SlotDurationSelect(discord.ui.Select):
                 return
             duration_info = DURATION_CONFIG[duration]
             duration_seconds = duration_info["seconds"]
-            points_cost = duration_info["points"]
+            points_cost = int(points_per_duration * (duration_seconds / 3600))
             if purchase_slot(self.slot_id, interaction.user.id, duration_seconds, points_cost):
                 await self.view.display_claimed(interaction, self.slot_id, interaction.user)
             else:
